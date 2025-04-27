@@ -5,6 +5,7 @@ import logging
 import json
 import re
 from pathlib import Path
+import concurrent.futures
 
 # === CONFIGURATION ===
 SOURCE_DIR = Path("/Volumes/Ohne Titel/source")
@@ -12,15 +13,17 @@ OLD_DIR = Path("/Volumes/Ohne Titel/old")
 VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
 BASE_QUALITY = 60
 #BASE_QUALITY = 38
-CPU = 7
+CPU = 8
 #CPU = 2
-AUDIO_BITRATE_STEREO = 128
-AUDIO_BITRATE_MULTI = 192
+AUDIO_BITRATE_STEREO = 160
+AUDIO_BITRATE_MULTI = 256
 AUDIO_BITRATE_THRESHOLD = 1.25  # wont convert if source bitrate is less than this times target bitrate
 OPUS_DELAY_MS = 60
 COMPRESSED_SUFFIX = "_compressed"
 KEYINT_SECONDS = "20s"
 CROP_TIMESTAMPS = [90, 180, 300]
+MAX_PARALLEL_ENCODES = 2  # Number of parallel ffmpeg processes
+
 
 # === LOGGING SETUP ===
 logging.basicConfig(
@@ -31,20 +34,38 @@ logging.basicConfig(
 # Try to disable copyfile (._ files) on macOS
 os.environ['COPYFILE_DISABLE'] = '1'
 
+
 def main():
     video_files = find_video_files(SOURCE_DIR)
-    for filepath in video_files:
-        if should_skip(filepath):
-            logging.info(f"Skipping {filepath}")
-            continue
-        logging.info(f"Processing {filepath}")
-        try:
-            compressed_path = compress_video(filepath)
-            move_to_old(filepath)
-            replace_original(filepath, compressed_path)
-            logging.info(f"Done: {filepath}")
-        except Exception as e:
-            logging.error(f"Failed: {filepath} - {e}")
+
+    # Process videos in parallel using ThreadPoolExecutor
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PARALLEL_ENCODES) as executor:
+        futures = []
+        for filepath in video_files:
+            if should_skip(filepath):
+                logging.info(f"Skipping {filepath}")
+                continue
+            futures.append(executor.submit(process_video, filepath))
+
+        # Wait for all tasks to complete and log results
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                result = future.result()
+                logging.info(f"Done: {result}")
+            except Exception as e:
+                logging.error(f"Failed task: {e}")
+
+
+def process_video(filepath):
+    logging.info(f"Processing {filepath}")
+    try:
+        compressed_path = compress_video(filepath)
+        move_to_old(filepath)
+        filepath = replace_original(filepath, compressed_path)
+        return filepath
+    except Exception as e:
+        logging.error(f"Failed: {filepath} - {e}")
+        raise Exception(f"Failed processing {filepath}: {e}")
 
 def find_video_files(root: Path):
     return [p for p in root.rglob("*") if p.suffix.lower() in VIDEO_EXTS and not p.name.startswith("._")]
@@ -103,7 +124,7 @@ def get_crop_params(path: Path):
     return f"crop={w}:{h}:{x}:{y}"
 
 def compress_video(src: Path):
-    dst = src.with_name(src.stem + COMPRESSED_SUFFIX + src.suffix)
+    dst = src.with_name(src.stem + COMPRESSED_SUFFIX + '.mkv')
     subtitle_dispositions = get_subtitle_dispositions(src)
     map_cmd = [
         "-map", "0:v",
@@ -149,6 +170,7 @@ def compress_video(src: Path):
         "-c:s", "copy",
         "-movflags", "use_metadata_tags",
         *disposition_cmds,
+        "-nostats" if MAX_PARALLEL_ENCODES > 1 else "",
         str(dst)
     ]
     logging.info("Running ffmpeg: %s", " ".join(cmd))
@@ -169,14 +191,23 @@ def get_audio_bitrate_cmd(path: Path):
         cmds = []
         for i, s in enumerate(streams):
             ch = s.get("channels", 2)
-            src_br = int(s.get("bit_rate", 0)) // 1000
+            # Handle missing bit_rate field
+            src_br = 0
+            if "bit_rate" in s and s["bit_rate"]:
+                try:
+                    src_br = int(s["bit_rate"]) // 1000
+                except (ValueError, TypeError):
+                    logging.warning(f"Invalid bit_rate in stream {i}: {s.get('bit_rate')}")
+
             layout = s.get("channel_layout", "")
             tgt_br = AUDIO_BITRATE_MULTI if ch > 2 else AUDIO_BITRATE_STEREO
 
-            if src_br >= tgt_br * AUDIO_BITRATE_THRESHOLD:
+            # Always transcode VBR audio (which often doesn't report a bitrate)
+            # or if source bitrate is higher than our target bitrate threshold
+            if src_br == 0 or src_br >= tgt_br * AUDIO_BITRATE_THRESHOLD:
                 cmds += [f"-c:a:{i}", "libopus", f"-b:a:{i}", f"{tgt_br}k"]
                 # Use channel mapping filter for 5.1 audio
-                if ch > 2 and "5.1" in layout and "side" in layout:
+                if ch >= 8 or (ch > 2 and "5.1" in layout and "side" in layout):
                     cmds += [f"-af:a:{i}", "channelmap=channel_layout=5.1"]
             else:
                 cmds += [f"-c:a:{i}", "copy"]
@@ -212,7 +243,13 @@ def move_to_old(path: Path):
     shutil.move(str(path), str(target_path))
 
 def replace_original(orig: Path, new: Path):
-    shutil.move(str(new), str(orig))
+    # When replacing the original file, keep the .mkv extension
+    new_path = orig.with_suffix(".mkv")
+    shutil.move(str(new), str(new_path))
+    # Remove the original file if it has a different extension
+    if orig != new_path:
+        orig.unlink()
+    return new_path
 
 if __name__ == "__main__":
     main()
