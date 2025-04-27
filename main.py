@@ -18,7 +18,6 @@ CPU = 8
 AUDIO_BITRATE_STEREO = 160
 AUDIO_BITRATE_MULTI = 256
 AUDIO_BITRATE_THRESHOLD = 1.25  # wont convert if source bitrate is less than this times target bitrate
-OPUS_DELAY_MS = 60
 COMPRESSED_SUFFIX = "_compressed"
 KEYINT_SECONDS = "20s"
 CROP_TIMESTAMPS = [90, 180, 300]
@@ -151,7 +150,7 @@ def compress_video(src: Path):
     vf_chain = ",".join(filter(None, [crop_filter, scale_expr]))
 
     svt_params = (
-        f"aq-mode=2:enable-qm=1:qm-min=0:tune=2:"
+        f"enable-qm=1:qm-min=0:tune=2:"
         f"enable-variance-boost=1:keyint={KEYINT_SECONDS}"
     )
 
@@ -164,8 +163,6 @@ def compress_video(src: Path):
         "-crf", str(adjusted_crf),
         "-svtav1-params", svt_params,
         *(["-vf", vf_chain] if vf_chain else []),
-        "-application", "audio",
-        "-opus_delay", str(OPUS_DELAY_MS),
         *audio_bitrate_cmd,
         "-c:s", "copy",
         "-movflags", "use_metadata_tags",
