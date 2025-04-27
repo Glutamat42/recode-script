@@ -8,9 +8,8 @@ from pathlib import Path
 import concurrent.futures
 
 # === CONFIGURATION ===
-SOURCE_DIR = Path("/Volumes/Ohne Titel/source")
-OLD_DIR = Path("/Volumes/Ohne Titel/old")
-VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
+SOURCE_DIR = Path("/media/veracrypt4/source_test")
+OLD_DIR = Path("/media/veracrypt4/old")
 BASE_QUALITY = 60
 #BASE_QUALITY = 38
 CPU = 8
@@ -18,10 +17,13 @@ CPU = 8
 AUDIO_BITRATE_STEREO = 160
 AUDIO_BITRATE_MULTI = 256
 AUDIO_BITRATE_THRESHOLD = 1.25  # wont convert if source bitrate is less than this times target bitrate
-COMPRESSED_SUFFIX = "_compressed"
 KEYINT_SECONDS = "20s"
+MAX_PARALLEL_ENCODES = 1  # Number of parallel ffmpeg processes
+
+# Typically these values do not need to be changed
+VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".webm", ".avi"}
+COMPRESSED_SUFFIX = "_compressed"
 CROP_TIMESTAMPS = [90, 180, 300]
-MAX_PARALLEL_ENCODES = 2  # Number of parallel ffmpeg processes
 
 
 # === LOGGING SETUP ===
@@ -127,7 +129,6 @@ def compress_video(src: Path):
     subtitle_dispositions = get_subtitle_dispositions(src)
     map_cmd = [
         "-map", "0:v",
-        "-map", "0:a?",
         "-map", "0:s?",
         "-map_metadata", "0"
     ]
@@ -167,7 +168,7 @@ def compress_video(src: Path):
         "-c:s", "copy",
         "-movflags", "use_metadata_tags",
         *disposition_cmds,
-        "-nostats" if MAX_PARALLEL_ENCODES > 1 else "",
+        "-nostats" if MAX_PARALLEL_ENCODES > 1 else "-stats",
         str(dst)
     ]
     logging.info("Running ffmpeg: %s", " ".join(cmd))
@@ -185,7 +186,11 @@ def get_audio_bitrate_cmd(path: Path):
         streams = data.get("streams", [])
         if not streams:
             return []
+
         cmds = []
+        filter_complex_parts = []
+        mapped_streams = []
+
         for i, s in enumerate(streams):
             ch = s.get("channels", 2)
             # Handle missing bit_rate field
@@ -201,13 +206,36 @@ def get_audio_bitrate_cmd(path: Path):
 
             # Always transcode VBR audio (which often doesn't report a bitrate)
             # or if source bitrate is higher than our target bitrate threshold
-            if src_br == 0 or src_br >= tgt_br * AUDIO_BITRATE_THRESHOLD:
-                cmds += [f"-c:a:{i}", "libopus", f"-b:a:{i}", f"{tgt_br}k"]
-                # Use channel mapping filter for 5.1 audio
-                if ch >= 8 or (ch > 2 and "5.1" in layout and "side" in layout):
-                    cmds += [f"-af:a:{i}", "channelmap=channel_layout=5.1"]
+            needs_transcode = src_br == 0 or src_br >= tgt_br * AUDIO_BITRATE_THRESHOLD
+            needs_channelmap = ch >= 8 or (ch > 2 and "5.1" in layout and "side" in layout)
+
+            if needs_transcode:
+                if needs_channelmap:
+                    # Add to filter_complex for 5.1 audio
+                    filter_complex_parts.append(f"[0:a:{i}]channelmap=channel_layout=5.1[a{i}]")
+                    mapped_streams.append(i)
+                    cmds += [f"-b:a:{i}", f"{tgt_br}k"]
+                else:
+                    # Normal stereo transcode
+                    cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "libopus", f"-b:a:{i}", f"{tgt_br}k"]
             else:
-                cmds += [f"-c:a:{i}", "copy"]
+                cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "copy"]
+
+        # Add filter_complex if needed
+        if filter_complex_parts:
+            cmds += ["-filter_complex", ";".join(filter_complex_parts)]
+
+            # Add -map statements for filtered streams
+            for i in mapped_streams:
+                cmds += ["-map", f"[a{i}]"]
+                cmds += [f"-c:a:{i}", "libopus"]  # Ensure codec is set for mapped streams
+                cmds += ["-map_metadata:s:a:" + str(i), "0:s:a:" + str(i)]
+
+            # Add map statements for other streams that weren't captured in filter_complex
+            for i, _ in enumerate(streams):
+                if i not in mapped_streams:
+                    cmds += ["-map", f"0:a:{i}"]
+
         return cmds
     except Exception as e:
         logging.error(f"Error in get_audio_bitrate_cmd: {e}")
