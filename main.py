@@ -202,57 +202,41 @@ def get_audio_bitrate_cmd(path: Path):
 
         cmds = []
         filter_complex_parts = []
-        mapped_streams = []
+        filtered_maps = {}
+        copy_maps = []
 
         for i, s in enumerate(streams):
             ch = s.get("channels", 2)
-            # Handle missing bit_rate field
-            src_br = 0
-            if "bit_rate" in s and s["bit_rate"]:
-                try:
-                    src_br = int(s["bit_rate"]) // 1000
-                except (ValueError, TypeError):
-                    logging.warning(f"Invalid bit_rate in stream {i}: {s.get('bit_rate')}")
-
+            src_br = int(s.get("bit_rate", 0) or 0) // 1000 if s.get("bit_rate") else 0
             layout = s.get("channel_layout", "")
             tgt_br = AUDIO_BITRATE_MULTI if ch > 2 else AUDIO_BITRATE_STEREO
 
-            # Always transcode VBR audio (which often doesn't report a bitrate)
-            # or if source bitrate is higher than our target bitrate threshold
             needs_transcode = src_br == 0 or src_br >= tgt_br * AUDIO_BITRATE_THRESHOLD
             needs_channelmap = ch >= 8 or (ch > 2 and "5.1" in layout and "side" in layout)
 
             if needs_transcode:
                 if needs_channelmap:
-                    # Add to filter_complex for 5.1 audio
                     filter_complex_parts.append(f"[0:a:{i}]channelmap=channel_layout=5.1[a{i}]")
-                    mapped_streams.append(i)
-                    cmds += [f"-b:a:{i}", f"{tgt_br}k"]
+                    filtered_maps[i] = tgt_br
                 else:
-                    # Normal stereo transcode
                     cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "libopus", f"-b:a:{i}", f"{tgt_br}k"]
             else:
-                cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "copy"]
+                copy_maps.append(i)
 
-        # Add filter_complex if needed
         if filter_complex_parts:
             cmds += ["-filter_complex", ";".join(filter_complex_parts)]
-
-            # Add -map statements for filtered streams
-            for i in mapped_streams:
-                cmds += ["-map", f"[a{i}]"]
-                cmds += [f"-c:a:{i}", "libopus"]  # Ensure codec is set for mapped streams
+            for i, br in filtered_maps.items():
+                cmds += ["-map", f"[a{i}]", f"-c:a:{i}", "libopus", f"-b:a:{i}", f"{br}k"]
                 cmds += ["-map_metadata:s:a:" + str(i), "0:s:a:" + str(i)]
 
-            # Add map statements for other streams that weren't captured in filter_complex
-            for i, _ in enumerate(streams):
-                if i not in mapped_streams:
-                    cmds += ["-map", f"0:a:{i}"]
+        for i in copy_maps:
+            cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "copy"]
 
         return cmds
     except Exception as e:
         logging.error(f"Error in get_audio_bitrate_cmd: {e}")
         return []
+
 
 def get_subtitle_dispositions(path: Path):
     cmd = [
