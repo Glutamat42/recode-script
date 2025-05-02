@@ -124,6 +124,18 @@ def get_crop_params(path: Path):
     y = min(c[3] for c in crop_values)
     return f"crop={w}:{h}:{x}:{y}"
 
+def get_low_priority_prefix():
+    """Return the command prefix to run a process at lowest priority based on OS"""
+    import platform
+    system = platform.system().lower()
+    if system == 'darwin':  # macOS
+        return ["nice", "-n", "20"]
+    elif system == 'linux':
+        return ["nice", "-n", "19"]
+    elif system == 'windows':
+        return ["start", "/low", "/wait", "cmd", "/c"]
+    return []  # Default: no prefix
+
 def compress_video(src: Path):
     dst = src.with_name(src.stem + COMPRESSED_SUFFIX + '.mkv')
     subtitle_dispositions = get_subtitle_dispositions(src)
@@ -156,6 +168,7 @@ def compress_video(src: Path):
     )
 
     cmd = [
+        *get_low_priority_prefix(),
         "ffmpeg", "-y", "-i", str(src),
         *map_cmd,
         "-c:v", "libsvtav1",
