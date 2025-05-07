@@ -8,16 +8,16 @@ from pathlib import Path
 import concurrent.futures
 
 # === CONFIGURATION ===
-SOURCE_DIR = Path("/media/veracrypt4/source_test")
-OLD_DIR = Path("/media/veracrypt4/old")
-BASE_QUALITY = 60
+SOURCE_DIR = Path("C:/Users/Markus/source")
+OLD_DIR = Path("C:/Users/Markus/old")
+BASE_QUALITY = 30
 #BASE_QUALITY = 38
-CPU = 8
+CPU = 2
 #CPU = 2
 AUDIO_BITRATE_STEREO = 160
 AUDIO_BITRATE_MULTI = 256
 AUDIO_BITRATE_THRESHOLD = 1.25  # wont convert if source bitrate is less than this times target bitrate
-KEYINT_SECONDS = "20s"
+KEYINT_SECONDS = "-2"
 MAX_PARALLEL_ENCODES = 1  # Number of parallel ffmpeg processes
 
 # Typically these values do not need to be changed
@@ -136,6 +136,20 @@ def get_low_priority_prefix():
         return ["start", "/low", "/wait", "cmd", "/c"]
     return []  # Default: no prefix
 
+def should_copy_video_stream(src: Path) -> bool:
+    """Check if the video stream should be copied based on codec and filename."""
+    cmd_check_codec = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name", "-of", "default=nw=1:nk=1",
+        str(src)
+    ]
+    try:
+        codec = subprocess.check_output(cmd_check_codec).decode().strip()
+        return codec == "hevc" and "FuN" in src.name
+    except Exception as e:
+        logging.error(f"Error checking codec: {e}")
+        return False
+
 def compress_video(src: Path):
     dst = src.with_name(src.stem + COMPRESSED_SUFFIX + '.mkv')
     subtitle_dispositions = get_subtitle_dispositions(src)
@@ -167,16 +181,24 @@ def compress_video(src: Path):
         f"enable-variance-boost=1:keyint={KEYINT_SECONDS}"
     )
 
+    # Use the refactored function for exclusion check
+    if should_copy_video_stream(src):
+        video_codec_cmd = ["-c:v", "copy"]
+    else:
+        video_codec_cmd = [
+            "-c:v", "libsvtav1",
+            "-pix_fmt", "yuv420p10le",
+            "-preset", str(CPU),
+            "-crf", str(adjusted_crf),
+            "-svtav1-params", svt_params,
+            *(["-vf", vf_chain] if vf_chain else [])
+        ]
+
     cmd = [
         *get_low_priority_prefix(),
         "ffmpeg", "-y", "-i", str(src),
         *map_cmd,
-        "-c:v", "libsvtav1",
-        "-pix_fmt", "yuv420p10le",
-        "-preset", str(CPU),
-        "-crf", str(adjusted_crf),
-        "-svtav1-params", svt_params,
-        *(["-vf", vf_chain] if vf_chain else []),
+        *video_codec_cmd,
         *audio_bitrate_cmd,
         "-c:s", "copy",
         "-movflags", "use_metadata_tags",
