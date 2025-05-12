@@ -9,7 +9,6 @@ import concurrent.futures
 
 # === CONFIGURATION ===
 SOURCE_DIR = Path("C:/Users/Markus/source")
-OLD_DIR = Path("C:/Users/Markus/old")
 BASE_QUALITY = 30
 #BASE_QUALITY = 38
 CPU = 2
@@ -65,7 +64,6 @@ def process_video(filepath):
     logging.info(f"Processing {filepath}")
     try:
         compressed_path = compress_video(filepath)
-        move_to_old(filepath)
         filepath = replace_original(filepath, compressed_path)
         return filepath
     except Exception as e:
@@ -205,8 +203,8 @@ def compress_video(src: Path):
         logging.info("Running ffmpeg: %s", " ".join(cmd))
         subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
-        logging.info("No transcoding needed, copying file: %s", str(dst))
-        shutil.copy2(str(src), str(dst))
+        logging.info("No transcoding needed, moving file to: %s", str(dst))
+        shutil.move(str(src), str(dst))
     return dst
 
 def get_audio_bitrate_cmd(path: Path):
@@ -280,12 +278,6 @@ def get_subtitle_dispositions(path: Path):
         return dispositions
     except:
         return []
-
-def move_to_old(path: Path):
-    rel_path = path.relative_to(SOURCE_DIR)
-    target_path = OLD_DIR / rel_path
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(path), str(target_path))
 
 def replace_original(orig: Path, new: Path):
     # When replacing the original file, keep the .mkv extension
