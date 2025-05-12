@@ -27,9 +27,13 @@ CROP_TIMESTAMPS = [90, 180, 300]
 
 
 # === LOGGING SETUP ===
+log_file = SOURCE_DIR / "video_compression.log"
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers = [
+        logging.FileHandler(log_file),
+    ]
 )
 
 # Try to disable copyfile (._ files) on macOS
@@ -199,7 +203,7 @@ def compress_video(src: Path):
     ]
     if audio_transcode or video_transcode:
         logging.info("Running ffmpeg: %s", " ".join(cmd))
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     else:
         logging.info("No transcoding needed, copying file: %s", str(dst))
         shutil.copy2(str(src), str(dst))
