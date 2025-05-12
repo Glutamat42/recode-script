@@ -74,19 +74,7 @@ def find_video_files(root: Path):
 def should_skip(path: Path):
     if COMPRESSED_SUFFIX in path.stem:
         return True
-    return is_av1(path)
-
-def is_av1(path: Path):
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name", "-of", "default=nw=1:nk=1",
-        str(path)
-    ]
-    try:
-        output = subprocess.check_output(cmd).decode().strip()
-        return output == "av1"
-    except:
-        return False
+    return False
 
 def get_resolution(path: Path):
     cmd = [
@@ -145,6 +133,8 @@ def should_copy_video_stream(src: Path) -> bool:
     ]
     try:
         codec = subprocess.check_output(cmd_check_codec).decode().strip()
+        if codec == 'av1':
+            return True
         return codec == "hevc" and "FuN" in src.name
     except Exception as e:
         logging.error(f"Error checking codec: {e}")
@@ -158,7 +148,7 @@ def compress_video(src: Path):
         "-map", "0:s?",
         "-map_metadata", "0"
     ]
-    audio_bitrate_cmd = get_audio_bitrate_cmd(src)
+    audio_transcode,audio_bitrate_cmd = get_audio_bitrate_cmd(src)
     disposition_cmds = []
     for index, is_default in subtitle_dispositions:
         disposition_cmds.extend(["-disposition:s:" + str(index), "default" if is_default else "0"])
@@ -182,9 +172,8 @@ def compress_video(src: Path):
     )
 
     # Use the refactored function for exclusion check
-    if should_copy_video_stream(src):
-        video_codec_cmd = ["-c:v", "copy"]
-    else:
+    video_transcode = not should_copy_video_stream(src)
+    if video_transcode:
         video_codec_cmd = [
             "-c:v", "libsvtav1",
             "-pix_fmt", "yuv420p10le",
@@ -193,6 +182,8 @@ def compress_video(src: Path):
             "-svtav1-params", svt_params,
             *(["-vf", vf_chain] if vf_chain else [])
         ]
+    else:
+        video_codec_cmd = ["-c:v", "copy"]
 
     cmd = [
         *get_low_priority_prefix(),
@@ -206,8 +197,12 @@ def compress_video(src: Path):
         "-nostats" if MAX_PARALLEL_ENCODES > 1 else "-stats",
         str(dst)
     ]
-    logging.info("Running ffmpeg: %s", " ".join(cmd))
-    subprocess.run(cmd, check=True)
+    if audio_transcode or video_transcode:
+        logging.info("Running ffmpeg: %s", " ".join(cmd))
+        subprocess.run(cmd, check=True)
+    else:
+        logging.info("No transcoding needed, copying file: %s", str(dst))
+        shutil.copy2(str(src), str(dst))
     return dst
 
 def get_audio_bitrate_cmd(path: Path):
@@ -222,6 +217,7 @@ def get_audio_bitrate_cmd(path: Path):
         if not streams:
             return []
 
+        transcode_anything = False
         cmds = []
         filter_complex_parts = []
         filtered_maps = {}
@@ -237,6 +233,7 @@ def get_audio_bitrate_cmd(path: Path):
             needs_channelmap = ch >= 8 or (ch > 2 and "5.1" in layout and "side" in layout)
 
             if needs_transcode:
+                transcode_anything = True
                 if needs_channelmap:
                     filter_complex_parts.append(f"[0:a:{i}]channelmap=channel_layout=5.1[a{i}]")
                     filtered_maps[i] = tgt_br
@@ -254,10 +251,10 @@ def get_audio_bitrate_cmd(path: Path):
         for i in copy_maps:
             cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "copy"]
 
-        return cmds
+        return transcode_anything, cmds
     except Exception as e:
         logging.error(f"Error in get_audio_bitrate_cmd: {e}")
-        return []
+        raise e
 
 
 def get_subtitle_dispositions(path: Path):
