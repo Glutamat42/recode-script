@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 import concurrent.futures
+from tqdm import tqdm
+
 
 # === CONFIGURATION ===
 SOURCE_DIR = Path("C:/Users/Markus/source")
@@ -41,24 +43,33 @@ os.environ['COPYFILE_DISABLE'] = '1'
 
 def main():
     video_files = find_video_files(SOURCE_DIR)
+    total_files = len(video_files)
 
-    # Process videos in parallel using ThreadPoolExecutor
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PARALLEL_ENCODES) as executor:
-        futures = []
-        for filepath in video_files:
-            if should_skip(filepath):
-                logging.info(f"Skipping {filepath}")
-                continue
-            futures.append(executor.submit(process_video, filepath))
+    logging.info(f"Found {total_files} video files to process")
 
-        # Wait for all tasks to complete and log results
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                result = future.result()
-                logging.info(f"Done: {result}")
-            except Exception as e:
-                logging.error(f"Failed task: {e}")
+    # Setup progress bar
+    with tqdm(total=total_files, desc="Compressing videos", unit="file") as progress_bar:
+        # Process videos in parallel using ThreadPoolExecutor
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_PARALLEL_ENCODES) as executor:
+            futures = {}
+            for filepath in video_files:
+                if should_skip(filepath):
+                    logging.info(f"Skipping {filepath}")
+                    progress_bar.update(1)  # Update progress for skipped files
+                    continue
+                future = executor.submit(process_video, filepath)
+                futures[future] = filepath
 
+            # Wait for all tasks to complete and log results
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    logging.info(f"Done: {result}")
+                except Exception as e:
+                    filepath = futures[future]
+                    logging.error(f"Failed task: {filepath} - {e}")
+                finally:
+                    progress_bar.update(1)  # Update progress bar
 
 def process_video(filepath):
     logging.info(f"Processing {filepath}")
