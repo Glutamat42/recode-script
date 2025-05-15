@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 import concurrent.futures
 from tqdm import tqdm
+from datetime import datetime
 
 
 # === CONFIGURATION ===
@@ -28,7 +29,7 @@ CROP_TIMESTAMPS = [90, 180, 300]
 
 
 # === LOGGING SETUP ===
-log_file = SOURCE_DIR / "video_compression.log"
+log_file = SOURCE_DIR / f"video_compression_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -86,6 +87,7 @@ def find_video_files(root: Path):
 
 def should_skip(path: Path):
     if COMPRESSED_SUFFIX in path.stem:
+        logging.info(f"Skipping {path} because it is a temporary file")
         return True
     return False
 
@@ -166,27 +168,27 @@ def compress_video(src: Path):
     for index, is_default in subtitle_dispositions:
         disposition_cmds.extend(["-disposition:s:" + str(index), "default" if is_default else "0"])
 
-    width, height = get_resolution(src)
-    scale_expr = ""
-    adjusted_crf = BASE_QUALITY
-    if width <= 720:  # DVD resolution or lower
-        adjusted_crf -= 4
-    elif width <= 1280:  # HD/720p
-        adjusted_crf -= 2
-    elif width > 1920:
-        scale_expr = "scale=1920:-2"
-
-    crop_filter = get_crop_params(src)
-    vf_chain = ",".join(filter(None, [crop_filter, scale_expr]))
-
-    svt_params = (
-        f"enable-qm=1:qm-min=0:tune=2:"
-        f"enable-variance-boost=1:keyint={KEYINT_SECONDS}"
-    )
-
     # Use the refactored function for exclusion check
     video_transcode = not should_copy_video_stream(src)
     if video_transcode:
+        width, height = get_resolution(src)
+        scale_expr = ""
+        adjusted_crf = BASE_QUALITY
+        if width <= 720:  # DVD resolution or lower
+            adjusted_crf -= 4
+        elif width <= 1280:  # HD/720p
+            adjusted_crf -= 2
+        elif width > 1920:
+            scale_expr = "scale=1920:-2"
+
+        crop_filter = get_crop_params(src)
+        vf_chain = ",".join(filter(None, [crop_filter, scale_expr]))
+
+        svt_params = (
+            f"enable-qm=1:qm-min=0:tune=2:"
+            f"enable-variance-boost=1:keyint={KEYINT_SECONDS}"
+        )
+
         video_codec_cmd = [
             "-c:v", "libsvtav1",
             "-pix_fmt", "yuv420p10le",
