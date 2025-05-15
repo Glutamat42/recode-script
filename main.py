@@ -221,7 +221,7 @@ def compress_video(src: Path):
 def get_audio_bitrate_cmd(path: Path):
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "a",
-        "-show_entries", "stream=channels,bit_rate,channel_layout", "-of", "json", str(path)
+        "-show_entries", "stream=channels,bit_rate,channel_layout,codec_name", "-of", "json", str(path)
     ]
     try:
         output = subprocess.check_output(cmd).decode()
@@ -238,11 +238,15 @@ def get_audio_bitrate_cmd(path: Path):
 
         for i, s in enumerate(streams):
             ch = s.get("channels", 2)
-            src_br = int(s.get("bit_rate", 0) or 0) // 1000 if s.get("bit_rate") else 0
+            src_br = int(s.get("bit_rate", 0)) // 1000
             layout = s.get("channel_layout", "")
+            codec = s.get("codec_name", "")
             tgt_br = AUDIO_BITRATE_MULTI if ch > 2 else AUDIO_BITRATE_STEREO
 
-            needs_transcode = src_br == 0 or src_br >= tgt_br * AUDIO_BITRATE_THRESHOLD
+            needs_transcode = (
+                    src_br > tgt_br * AUDIO_BITRATE_THRESHOLD
+                    or (src_br == 0 and codec != "opus")
+            )
             needs_channelmap = ch >= 8 or (ch > 2 and "5.1" in layout and "side" in layout)
 
             if needs_transcode:
