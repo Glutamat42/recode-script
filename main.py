@@ -163,7 +163,7 @@ def compress_video(src: Path):
         "-map", "0:s?",
         "-map_metadata", "0"
     ]
-    audio_transcode,audio_bitrate_cmd = get_audio_bitrate_cmd(src)
+    audio_transcode, audio_bitrate_cmd = get_audio_bitrate_cmd(src)
     disposition_cmds = []
     for index, is_default in subtitle_dispositions:
         disposition_cmds.extend(["-disposition:s:" + str(index), "default" if is_default else "0"])
@@ -200,6 +200,12 @@ def compress_video(src: Path):
     else:
         video_codec_cmd = ["-c:v", "copy"]
 
+    # Simple metadata addition (just 3 new lines)
+    metadata_cmd = [
+        "-metadata", f"video_settings={' '.join(video_codec_cmd)}",
+        "-metadata", f"audio_settings={' '.join(audio_bitrate_cmd)}"
+    ]
+
     cmd = [
         *get_low_priority_prefix(),
         "ffmpeg", "-y", "-i", str(src),
@@ -209,6 +215,7 @@ def compress_video(src: Path):
         "-c:s", "copy",
         "-movflags", "use_metadata_tags",
         *disposition_cmds,
+        *metadata_cmd,
         "-nostats" if MAX_PARALLEL_ENCODES > 1 else "-stats",
         str(dst)
     ]
