@@ -98,25 +98,6 @@ class FileProcessor:
             logging.error(f"Error checking codec: {e}")
             return False
     
-    def _determine_aac_encoder(self):
-        """Determine which AAC encoder to use, preferring Apple's Audio Toolbox, then FDK-AAC"""
-        # Check for Apple's Audio Toolbox AAC encoder
-        try:
-            result = subprocess.run(
-                ["ffmpeg", "-hide_banner", "-encoders"], 
-                capture_output=True, text=True, check=True
-            )
-            encoders = result.stdout
-            
-            if "aac_at" in encoders:
-                return "aac_at"
-            elif "libfdk_aac" in encoders:
-                return "libfdk_aac"
-            else:
-                raise Exception("Neither Apple Audio Toolbox (aac_at) nor FDK-AAC (libfdk_aac) encoder available")
-        except subprocess.CalledProcessError as e:
-            raise Exception(f"Failed to check available encoders: {e}")
-
     def _analyze_audio_streams(self):
         """Analyze audio streams and determine what processing is needed"""
         cmd = [
@@ -132,7 +113,6 @@ class FileProcessor:
 
             # Get duration from format section
             duration = float(data.get("format", {}).get("duration", 0))
-            aac_encoder = self._determine_aac_encoder()
             
             stream_targets = []
             transcode_anything = False
@@ -145,11 +125,29 @@ class FileProcessor:
                 if src_br == 0:
                     src_br = self._get_actual_audio_bitrate(i, duration)
                 
-                tgt_br = self.config.audio_bitrate_multi if ch > 2 else self.config.audio_bitrate_stereo
-
-                # Determine target codec based on channel count
-                target_codec = aac_encoder if ch > 2 else "libopus"
-                needs_transcode = src_br > tgt_br * self.config.audio_bitrate_threshold
+                # For stereo/mono: use target bitrate, for multi-channel: use VBR (no bitrate comparison needed)
+                if ch > 2:
+                    tgt_br = 0  # VBR mode, no target bitrate
+                    target_codec = "libfdk_aac"
+                    # Calculate threshold based on VBR level and channel count
+                    vbr_level = self.config.audio_multichannel_vbr_level
+                    if vbr_level == 1:
+                        kbps_per_channel = 32
+                    elif vbr_level == 2:
+                        kbps_per_channel = 40
+                    elif vbr_level == 3:
+                        kbps_per_channel = 56
+                    elif vbr_level == 4:
+                        kbps_per_channel = 64
+                    else:  # vbr_level == 5
+                        kbps_per_channel = 96
+                    
+                    threshold_bitrate = int(kbps_per_channel * ch * 1.15)
+                    needs_transcode = src_br > threshold_bitrate
+                else:
+                    tgt_br = self.config.audio_bitrate_stereo
+                    target_codec = "libopus"
+                    needs_transcode = src_br > tgt_br * self.config.audio_bitrate_threshold
 
                 stream_target = {
                     'index': i,
@@ -178,11 +176,19 @@ class FileProcessor:
             i = target['index']
             
             if target['needs_transcode']:
-                cmds += [
-                    f"-map", f"0:a:{i}", 
-                    f"-c:a:{i}", target['target_codec'], 
-                    f"-b:a:{i}", f"{target['target_bitrate']}k"
-                ]
+                if target['target_codec'] == 'libfdk_aac':
+                    cmds += [
+                        f"-map", f"0:a:{i}", 
+                        f"-c:a:{i}", target['target_codec'], 
+                        f"-vbr", str(self.config.audio_multichannel_vbr_level)
+                    ]
+                else:
+                    # Use bitrate for other codecs (like libopus)
+                    cmds += [
+                        f"-map", f"0:a:{i}", 
+                        f"-c:a:{i}", target['target_codec'], 
+                        f"-b:a:{i}", f"{target['target_bitrate']}k"
+                    ]
             else:
                 cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "copy"]
 
