@@ -142,7 +142,7 @@ class FileProcessor:
                     else:  # vbr_level == 5
                         kbps_per_channel = 96
                     
-                    threshold_bitrate = int(kbps_per_channel * ch * 1.15)
+                    threshold_bitrate = int(kbps_per_channel * ch * self.config.audio_bitrate_threshold)
                     needs_transcode = src_br > threshold_bitrate
                 else:
                     tgt_br = self.config.audio_bitrate_stereo
