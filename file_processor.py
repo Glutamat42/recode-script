@@ -372,8 +372,8 @@ class FileProcessor:
             # Run ffmpeg and capture stderr to get the size info
             result = subprocess.run(extract_cmd, capture_output=True, text=True, check=True)
             
-            # Parse the size from ffmpeg output (look for "size=" in stderr)
-            size_match = re.search(r'size=\s*(\d+)kB', result.stderr)
+            # Parse the audio size from ffmpeg output (look for "audio:XXXkB" in stderr)
+            size_match = re.search(r'audio:(\d+)kB', result.stderr, re.IGNORECASE)
             if size_match:
                 size_kb = int(size_match.group(1))
                 size_bits = size_kb * 1024 * 8
@@ -383,7 +383,7 @@ class FileProcessor:
                 logging.info(f"Measured audio bitrate for stream {stream_index}: {bitrate_kbps}k")
                 return bitrate_kbps
             else:
-                raise Exception("Could not parse stream size from ffmpeg output")
+                raise Exception(f"Could not parse audio stream size from ffmpeg output for stream index {stream_index} of file {self.filepath}")
                 
         except Exception as e:
             logging.warning(f"Could not measure audio bitrate for stream {stream_index}: {e}")
