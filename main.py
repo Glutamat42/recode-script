@@ -54,7 +54,8 @@ def main():
                     progress_bar.update(1)  # Update progress bar
 
 def find_video_files(root: Path):
-    return [p for p in root.rglob("*") if p.suffix.lower() in config.video_exts and not p.name.startswith("._")]
+    files = [p for p in root.rglob("*") if p.suffix.lower() in config.video_exts and not p.name.startswith("._")]
+    return sorted(files)
 
 if __name__ == "__main__":
     main()

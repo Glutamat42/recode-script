@@ -69,7 +69,16 @@ class FileProcessor:
         h = max(c[1] for c in crop_values)
         x = min(c[2] for c in crop_values)
         y = min(c[3] for c in crop_values)
-        return f"crop={w}:{h}:{x}:{y}"
+        
+        # Get original resolution to compare
+        orig_width, orig_height = self._get_resolution()
+        
+        # Only return crop parameters if they actually crop something
+        # (i.e., if the crop dimensions are smaller than original or offset from 0,0)
+        if w < orig_width or h < orig_height or x > 0 or y > 0:
+            return f"crop={w}:{h}:{x}:{y}"
+        
+        return None
     
     def _get_low_priority_prefix(self):
         """Return the command prefix to run a process at lowest priority based on OS"""
@@ -251,14 +260,15 @@ class FileProcessor:
     def _build_map_commands(self):
         """Build ffmpeg mapping commands"""
         return [
-            "-map", "0:v",
-            "-map", "0:s?",
+            "-map", "0:v:0",  # Only first video stream
+            "-map", "0:s?",   # All subtitle streams (optional)
             "-map_metadata", "0"
         ]
     
     def _build_video_commands(self):
         """Build video encoding commands"""
         video_transcode = not self._should_copy_video_stream()
+        
         if not video_transcode:
             return ["-c:v", "copy"]
         
@@ -267,7 +277,13 @@ class FileProcessor:
         scale_expr = "scale=1920:-2" if width > 1920 else ""
         
         crop_filter = self._get_crop_params()
-        vf_chain = ",".join(filter(None, [crop_filter, scale_expr]))
+        
+        # Build filter chain only with non-empty filters
+        filters = []
+        if crop_filter:
+            filters.append(crop_filter)
+        if scale_expr:
+            filters.append(scale_expr)
         
         svt_params = (
             f"enable-qm=1:qm-min=0:tune=2:"
@@ -282,8 +298,8 @@ class FileProcessor:
             "-svtav1-params", svt_params,
         ]
         
-        if vf_chain:
-            video_cmd.extend(["-vf", vf_chain])
+        if filters:
+            video_cmd.extend(["-vf", ",".join(filters)])
             
         return video_cmd
     
