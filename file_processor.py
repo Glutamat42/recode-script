@@ -373,7 +373,7 @@ class FileProcessor:
             result = subprocess.run(extract_cmd, capture_output=True, text=True, check=True)
             
             # Parse the audio size from ffmpeg output (look for "audio:XXXkB" in stderr)
-            size_match = re.search(r'audio:(\d+)kB', result.stderr, re.IGNORECASE)
+            size_match = re.search(r'audio:(\d+)[kK]', result.stderr, re.IGNORECASE)
             if size_match:
                 size_kb = int(size_match.group(1))
                 size_bits = size_kb * 1024 * 8
@@ -387,4 +387,4 @@ class FileProcessor:
                 
         except Exception as e:
             logging.warning(f"Could not measure audio bitrate for stream {stream_index}: {e}")
-            return 9999  # fallback: just reencode
+            return 1  # fallback: minimal bitrate, prevent multiple reencodes in case of errors
