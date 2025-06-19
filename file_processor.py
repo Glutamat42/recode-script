@@ -343,8 +343,17 @@ class FileProcessor:
             str(dst)
         ]
         logging.info("Running ffmpeg: %s", " ".join(cmd))
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return dst
+        
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return dst
+        except subprocess.CalledProcessError as e:
+            logging.error("FFmpeg command failed with return code %d", e.returncode)
+            if hasattr(e, 'stderr') and e.stderr:
+                logging.error("FFmpeg STDERR: %s", e.stderr)
+            if hasattr(e, 'stdout') and e.stdout:
+                logging.error("FFmpeg STDOUT: %s", e.stdout)
+            raise e
     
     def _replace_original(self, new_path: Path):
         """Replace the original file with the compressed version"""
