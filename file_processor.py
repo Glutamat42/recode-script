@@ -193,7 +193,7 @@ class FileProcessor:
                     needs_transcode = src_br > threshold_bitrate
                 else:
                     tgt_br = self.config.audio_bitrate_stereo
-                    encoder_name = "libopus"
+                    target_codec = "libopus"
                     needs_transcode = src_br > tgt_br * self.config.audio_bitrate_threshold
 
                 stream_target = {
@@ -203,7 +203,7 @@ class FileProcessor:
                     'target_bitrate': tgt_br,
                     'target_codec': target_codec,
                     'needs_transcode': needs_transcode,
-                    'encoder_name': encoder_name,
+                    'encoder_name': encoder_name if ch > 2 else target_codec,
                     'quality_param': quality_param if ch > 2 else None,
                     'quality_value': quality_value if ch > 2 else None
                 }
