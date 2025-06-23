@@ -14,6 +14,7 @@ class FileProcessor:
     def __init__(self, filepath: Path, config: Config):
         self.filepath = filepath
         self.config = config
+        self._aac_encoder_info = None  # Cache for encoder detection
     
     def process(self):
         """Process the video file through the complete lifecycle"""
@@ -32,6 +33,30 @@ class FileProcessor:
             logging.info(f"Skipping {self.filepath} because it is a temporary file")
             return True
         return False
+    
+    def _get_available_aac_encoder(self):
+        """Detect which AAC encoder is available and return encoder info"""
+        if self._aac_encoder_info is not None:
+            return self._aac_encoder_info
+            
+        try:
+            # Check if libfdk_aac is available
+            cmd = ["ffmpeg", "-hide_banner", "-encoders"]
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+            if "libfdk_aac" in result.stdout:
+                self._aac_encoder_info = ("libfdk_aac", "vbr", self.config.audio_multichannel_vbr_level)
+                logging.info("Using libfdk_aac encoder for multi-channel audio")
+            elif "aac_at" in result.stdout:
+                self._aac_encoder_info = ("aac_at", "q:a", self.config.audio_multichannel_aac_at_quality)
+                logging.info("Using aac_at encoder for multi-channel audio")
+            else:
+                raise Exception("No suitable AAC encoder found")
+                
+        except Exception as e:
+            raise Exception(f"Failed to detect AAC encoder: {e}")
+            
+        return self._aac_encoder_info
     
     def _get_resolution(self):
         """Get video resolution"""
@@ -125,6 +150,9 @@ class FileProcessor:
             
             stream_targets = []
             transcode_anything = False
+            
+            # Get available AAC encoder info
+            encoder_name, quality_param, quality_value = self._get_available_aac_encoder()
 
             for i, s in enumerate(streams):
                 ch = s.get("channels", 2)
@@ -137,25 +165,35 @@ class FileProcessor:
                 # For stereo/mono: use target bitrate, for multi-channel: use VBR (no bitrate comparison needed)
                 if ch > 2:
                     tgt_br = 0  # VBR mode, no target bitrate
-                    target_codec = "libfdk_aac"
-                    # Calculate threshold based on VBR level and channel count
-                    vbr_level = self.config.audio_multichannel_vbr_level
-                    if vbr_level == 1:
-                        kbps_per_channel = 32
-                    elif vbr_level == 2:
-                        kbps_per_channel = 40
-                    elif vbr_level == 3:
-                        kbps_per_channel = 56
-                    elif vbr_level == 4:
+                    target_codec = encoder_name
+                    
+                    # Calculate threshold based on encoder type and channel count
+                    if encoder_name == "libfdk_aac":
+                        vbr_level = self.config.audio_multichannel_vbr_level
+                        if vbr_level == 1:
+                            kbps_per_channel = 32
+                        elif vbr_level == 2:
+                            kbps_per_channel = 40
+                        elif vbr_level == 3:
+                            kbps_per_channel = 56
+                        elif vbr_level == 4:
+                            kbps_per_channel = 64
+                        else:  # vbr_level == 5
+                            kbps_per_channel = 96
+                    elif encoder_name == "aac_at":
+                        # For aac_at, estimate kbps based on quality level (0-14)
+                        # Lower quality numbers = higher bitrate
+                        quality = self.config.audio_multichannel_aac_at_quality
+                        kbps_per_channel = max(32, 128 - (quality * 6))  # Rough approximation
+                    else:
+                        # Fallback for built-in aac
                         kbps_per_channel = 64
-                    else:  # vbr_level == 5
-                        kbps_per_channel = 96
                     
                     threshold_bitrate = int(kbps_per_channel * ch * self.config.audio_bitrate_threshold)
                     needs_transcode = src_br > threshold_bitrate
                 else:
                     tgt_br = self.config.audio_bitrate_stereo
-                    target_codec = "libopus"
+                    encoder_name = "libopus"
                     needs_transcode = src_br > tgt_br * self.config.audio_bitrate_threshold
 
                 stream_target = {
@@ -164,7 +202,10 @@ class FileProcessor:
                     'source_bitrate': src_br,
                     'target_bitrate': tgt_br,
                     'target_codec': target_codec,
-                    'needs_transcode': needs_transcode
+                    'needs_transcode': needs_transcode,
+                    'encoder_name': encoder_name,
+                    'quality_param': quality_param if ch > 2 else None,
+                    'quality_value': quality_value if ch > 2 else None
                 }
                 
                 if needs_transcode:
@@ -189,15 +230,30 @@ class FileProcessor:
                     cmds += [
                         f"-map", f"0:a:{i}", 
                         f"-c:a:{i}", target['target_codec'], 
-                        f"-vbr", str(self.config.audio_multichannel_vbr_level)
+                        f"-vbr", str(target['quality_value'])
                     ]
-                else:
-                    # Use bitrate for other codecs (like libopus)
+                elif target['target_codec'] == 'aac_at':
                     cmds += [
                         f"-map", f"0:a:{i}", 
                         f"-c:a:{i}", target['target_codec'], 
-                        f"-b:a:{i}", f"{target['target_bitrate']}k"
+                        f"-q:a:{i}", str(target['quality_value'])
                     ]
+                else:
+                    # Use bitrate for other codecs (like libopus or built-in aac)
+                    if target['target_codec'] == 'aac':
+                        # Built-in aac uses CBR
+                        cmds += [
+                            f"-map", f"0:a:{i}", 
+                            f"-c:a:{i}", target['target_codec'], 
+                            f"-b:a:{i}", f"{target['quality_value']}k"
+                        ]
+                    else:
+                        # libopus and other codecs
+                        cmds += [
+                            f"-map", f"0:a:{i}", 
+                            f"-c:a:{i}", target['target_codec'], 
+                            f"-b:a:{i}", f"{target['target_bitrate']}k"
+                        ]
             else:
                 cmds += [f"-map", f"0:a:{i}", f"-c:a:{i}", "copy"]
 
